@@ -2,14 +2,14 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# 1. Настройка страницы
+# 1. Настройка страницы в стиле современного дашборда
 st.set_page_config(
     page_title="Financial Dashboard",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# 2. Стилизация карточек
+# 2. Стилизация (CSS)
 st.markdown("""
     <style>
     .stMetric {
@@ -19,73 +19,81 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         border: 1px solid #f0f2f6;
     }
+    div[data-testid="stMetricValue"] {
+        font-size: 1.8rem !important;
+        color: #1E293B;
+    }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("📊 Финансовый Дашборд")
 
-# 3. Загрузка файла
-uploaded_file = st.sidebar.file_uploader("Загрузите файл .xlsm", type=['xlsm', 'xlsx'])
+# 3. Загрузка файла в сайдбаре
+uploaded_file = st.sidebar.file_uploader("Загрузите файл .xlsm или .xlsx", type=['xlsm', 'xlsx'])
 
 if uploaded_file:
     try:
-        # Чтение данных с первого листа
+        # Чтение данных
         @st.cache_data
-        def get_data(file):
-            data = pd.read_excel(file, engine='openpyxl')
-            # Удаляем полностью пустые строки
-            data = data.dropna(how='all')
-            return data
+        def load_data(file):
+            # Читаем данные, движок openpyxl обязателен для .xlsm
+            df = pd.read_excel(file, engine='openpyxl')
+            # Очистка от полностью пустых строк
+            df = df.dropna(how='all')
+            return df
 
-        df = get_data(uploaded_file)
+        raw_df = load_data(uploaded_file)
 
-        if not df.empty:
-            # Безопасное преобразование 2-го столбца в числа
-            # (индекс 1 - это второй столбец, где обычно суммы)
-            numeric_col_name = df.columns[1]
-            df[numeric_col_name] = pd.to_numeric(df[numeric_col_name], errors='coerce')
+        if not raw_df.empty:
+            # Определяем колонки (первая - текст/дата, вторая - сумма)
+            label_col = raw_df.columns[0]
+            value_col = raw_df.columns[1]
+
+            # Преобразование данных (защита от TypeError)
+            raw_df[value_col] = pd.to_numeric(raw_df[value_col], errors='coerce')
+            df_final = raw_df.dropna(subset=[value_col])
+
+            # --- БОКОВАЯ ПАНЕЛЬ С ФИЛЬТРАМИ ---
+            st.sidebar.header("Настройки")
+            unique_vals = df_final[label_col].unique()
+            selected = st.sidebar.multiselect(f"Фильтр по {label_col}:", unique_vals, default=unique_vals)
             
-            # Очистка от строк, где сумма не определилась (NaN)
-            df_clean = df.dropna(subset=[numeric_col_name])
+            # Применение фильтра
+            filtered_df = df_final[df_final[label_col].isin(selected)]
 
-            # --- ФИЛЬТРЫ ---
-            st.sidebar.subheader("Настройки")
-            first_col_name = df_clean.columns[0]
-            categories = df_clean[first_col_name].unique()
-            selected = st.sidebar.multiselect("Фильтр:", categories, default=categories)
-            
-            df_filtered = df_clean[df_clean[first_col_name].isin(selected)]
-
-            # --- KPI МЕТРИКИ ---
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Общая сумма", f"{df_filtered[numeric_col_name].sum():,.2f}")
-            with col2:
-                st.metric("Средний чек", f"{df_filtered[numeric_col_name].mean():,.2f}")
-            with col3:
-                st.metric("Кол-во записей", f"{len(df_filtered)}")
+            # --- ВЕРХНИЕ МЕТРИКИ (KPI) ---
+            kpi1, kpi2, kpi3 = st.columns(3)
+            with kpi1:
+                st.metric("Итоговая сумма", f"{filtered_df[value_col].sum():,.2f}")
+            with kpi2:
+                st.metric("Средний показатель", f"{filtered_df[value_col].mean():,.2f}")
+            with kpi3:
+                st.metric("Всего записей", f"{len(filtered_df)}")
 
             st.markdown("---")
 
-            # --- ГРАФИКИ ---
-            c1, c2 = st.columns(2)
-            with c1:
-                st.subheader("Линейный график")
-                fig_line = px.line(df_filtered, x=first_col_name, y=numeric_col_name, template="plotly_white")
-                st.plotly_chart(fig_line, use_container_width=True)
+            # --- ГРАФИКИ (Визуализация) ---
+            col_left, col_right = st.columns(2)
             
-            with c2:
-                st.subheader("Распределение")
-                fig_pie = px.pie(df_filtered, names=first_col_name, values=numeric_col_name, hole=0.4)
+            with col_left:
+                st.subheader("Временная зависимость / Тренды")
+                fig_line = px.line(filtered_df, x=label_col, y=value_col, 
+                                   template="plotly_white", markers=True)
+                st.plotly_chart(fig_line, use_container_width=True)
+                
+            with col_right:
+                st.subheader("Структура данных")
+                fig_pie = px.pie(filtered_df, names=label_col, values=value_col, 
+                                 hole=0.4, color_discrete_sequence=px.colors.qualitative.Safe)
                 st.plotly_chart(fig_pie, use_container_width=True)
 
-            # --- ТАБЛИЦА ---
-            with st.expander("Открыть таблицу данных"):
-                st.dataframe(df_filtered, use_container_width=True)
+            # --- ТАБЛИЦА С ДАННЫМИ ---
+            with st.expander("Просмотреть детализированную таблицу"):
+                st.dataframe(filtered_df, use_container_width=True)
         else:
-            st.warning("Файл пуст.")
+            st.warning("Загруженный файл не содержит данных.")
 
     except Exception as e:
-        st.error(f"Произошла ошибка: {e}")
+        st.error(f"Произошла ошибка при обработке: {e}")
 else:
-    st.info("Пожалуйста, загрузите Excel файл в боковой панели.")
+    st.info("Пожалуйста, загрузите Excel-файл (например, Demo Dashboard Financier.xlsm) через меню слева.")
